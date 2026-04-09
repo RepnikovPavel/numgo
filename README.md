@@ -41,32 +41,74 @@ err := numgo.Save("output.npy", arr)
 
 npz not compressed
 ```go
-arrays := map[string]*numgo.Array{
-    "a": {Shape: []int{3}, Data: []int32{10, 20, 30}},
-    "b": {Shape: []int{2,2}, Data: []float64{1,2,3,4}},
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"github.com/RepnikovPavel/numgo"
+)
+
+func main() {
+	arrays := map[string]*numgo.Array{
+		"a": {Shape: []int{3}, Data: []int32{10, 20, 30}},
+		"b": {Shape: []int{2, 2}, Data: []float64{1, 2, 3, 4}},
+	}
+
+	// Сохраняем сжатый NPZ
+	err := numgo.SaveNPZ("bundle_compressed.npz", arrays)
+	if err != nil {
+		log.Fatalf("SaveNPZ failed: %v", err)
+	}
+
+	// Читаем его же
+	data, err := numgo.LoadNPZ("bundle_compressed.npz")
+	if err != nil {
+		log.Fatalf("LoadNPZ failed: %v", err)
+	}
+
+	a := data["a"]
+	b := data["b"]
+	fmt.Printf("a: shape=%v, data=%v\n", a.Shape, a.Data)
+	fmt.Printf("b: shape=%v, data=%v\n", b.Shape, b.Data)
 }
-err := numgo.SaveNPZ("bundle.npz", arrays)
-data, err := numgo.LoadNPZ("bundle.npz")
-a := data["a"]
-b := data["b"]
 ```
 
 npz compressed
 ```go
-arrays := map[string]*numgo.Array{
-    "a": {Shape: []int{3}, Data: []int32{10, 20, 30}},
-    "b": {Shape: []int{2, 2}, Data: []float64{1, 2, 3, 4}},
-}
-err := numgo.SaveNPZCompressed("bundle_compressed.npz", arrays)
+package main
 
-data, err := numgo.LoadNPZ("bundle.npz")
-if err != nil {
-    panic(err)
+import (
+	"fmt"
+	"log"
+
+	"github.com/RepnikovPavel/numgo"
+)
+
+func main() {
+	arrays := map[string]*numgo.Array{
+		"a": {Shape: []int{3}, Data: []int32{10, 20, 30}},
+		"b": {Shape: []int{2, 2}, Data: []float64{1, 2, 3, 4}},
+	}
+
+	// Сохраняем сжатый NPZ
+	err := numgo.SaveNPZCompressed("bundle_compressed.npz", arrays)
+	if err != nil {
+		log.Fatalf("SaveNPZCompressed failed: %v", err)
+	}
+
+	// Читаем его же
+	data, err := numgo.LoadNPZ("bundle_compressed.npz")
+	if err != nil {
+		log.Fatalf("LoadNPZ failed: %v", err)
+	}
+
+	a := data["a"]
+	b := data["b"]
+	fmt.Printf("a: shape=%v, data=%v\n", a.Shape, a.Data)
+	fmt.Printf("b: shape=%v, data=%v\n", b.Shape, b.Data)
 }
-a := data["a"]
-b := data["b"]
-fmt.Println(a.Shape, a.Data)
-fmt.Println(b.Shape, b.Data)
 
 ```
 

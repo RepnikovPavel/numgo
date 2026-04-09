@@ -928,3 +928,124 @@ print("OK")
 		}
 	})
 }
+
+func TestSaveLoadEmptyNPZ(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "numgo_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	npzPath := filepath.Join(tmpDir, "empty.npz")
+	arrays := map[string]*Array{}
+
+	if err := SaveNPZ(npzPath, arrays); err != nil {
+		t.Fatalf("SaveNPZ with empty map failed: %v", err)
+	}
+
+	loaded, err := LoadNPZ(npzPath)
+	if err != nil {
+		t.Fatalf("LoadNPZ with empty archive failed: %v", err)
+	}
+
+	if len(loaded) != 0 {
+		t.Errorf("expected 0 arrays, got %d", len(loaded))
+	}
+}
+
+func TestLoadNonExistentFile(t *testing.T) {
+	_, err := Load("nonexistent.npy")
+	if err == nil {
+		t.Error("expected error when loading nonexistent file, got nil")
+	}
+
+	_, err = LoadNPZ("nonexistent.npz")
+	if err == nil {
+		t.Error("expected error when loading nonexistent npz, got nil")
+	}
+}
+
+func TestSaveLoadStrings(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "numgo_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tests := []struct {
+		name  string
+		data  []string
+		shape []int
+	}{
+		{
+			name:  "ASCII",
+			data:  []string{"hello", "world", "foo"},
+			shape: []int{3},
+		},
+		{
+			name:  "Unicode",
+			data:  []string{"Привет", "世界", "😊"},
+			shape: []int{3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(tmpDir, tt.name+".npy")
+			original := &Array{
+				Shape: tt.shape,
+				Data:  tt.data,
+			}
+
+			if err := Save(path, original); err != nil {
+				t.Fatalf("Save failed: %v", err)
+			}
+
+			loaded, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+
+			if !reflect.DeepEqual(original.Shape, loaded.Shape) {
+				t.Errorf("shape mismatch: got %v, want %v", loaded.Shape, original.Shape)
+			}
+			if !reflect.DeepEqual(original.Data, loaded.Data) {
+				t.Errorf("data mismatch: got %v, want %v", loaded.Data, original.Data)
+			}
+		})
+	}
+}
+
+func TestWriteReadStringRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		data []string
+	}{
+		{"ascii", []string{"a", "bc", "def"}},
+		{"unicode", []string{"こんにちは", "世界", "😀"}},
+		{"mixed", []string{"hello", "привет", "world"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arr := &Array{Shape: []int{len(tt.data)}, Data: tt.data}
+
+			var buf bytes.Buffer
+			if err := Write(&buf, arr); err != nil {
+				t.Fatalf("Write failed: %v", err)
+			}
+
+			loaded, err := Read(bytes.NewReader(buf.Bytes()))
+			if err != nil {
+				t.Fatalf("Read failed: %v", err)
+			}
+
+			if !reflect.DeepEqual(arr.Shape, loaded.Shape) {
+				t.Errorf("shape mismatch")
+			}
+			if !reflect.DeepEqual(arr.Data, loaded.Data) {
+				t.Errorf("data mismatch: got %v, want %v", loaded.Data, arr.Data)
+			}
+		})
+	}
+}
