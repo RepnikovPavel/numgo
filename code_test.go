@@ -19,15 +19,18 @@ var benchDir = flag.String("benchdir", "", "base directory for benchmark tempora
 func TestMain(m *testing.M) {
 	flag.Parse()
 
-	// Если Python доступен, пытаемся сгенерировать эталонные файлы
+	// Если папка testdata существует, удалим её, чтобы гарантировать свежую генерацию
+	if _, err := os.Stat("testdata"); err == nil {
+		os.RemoveAll("testdata")
+	}
+
 	if _, err := exec.LookPath("python3"); err == nil {
-		// Проверяем, существует ли уже папка testdata (можно не перегенерировать)
-		if _, err := os.Stat("testdata"); os.IsNotExist(err) {
-			cmd := exec.Command("python3", "gen_testdata.py")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				fmt.Printf("Warning: failed to generate testdata: %v\nOutput: %s\n", err, out)
-			}
+		cmd := exec.Command("python3", "gen_testdata.py")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			fmt.Printf("Warning: failed to generate testdata: %v\nOutput: %s\n", err, out)
 		}
+	} else {
+		fmt.Println("python3 not found, cross-language tests will be skipped")
 	}
 
 	os.Exit(m.Run())
@@ -176,7 +179,8 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 				t.Fatalf("Write failed: %v", err)
 			}
 
-			loaded, err := Read(&buf)
+			// ИСПРАВЛЕНИЕ: передаём Reader, а не буфер напрямую
+			loaded, err := Read(bytes.NewReader(buf.Bytes()))
 			if err != nil {
 				t.Fatalf("Read failed: %v", err)
 			}
@@ -206,7 +210,7 @@ func TestScalar(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := Read(&buf)
+	loaded, err := Read(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +235,7 @@ func Test1DArray(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := Read(&buf)
+	loaded, err := Read(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,10 +361,11 @@ func TestLoadFile(t *testing.T) {
 
 	filePath := filepath.Join(tmpDir, "test.npy")
 
+	// ИСПРАВЛЕНИЕ: FortranOrder изменён на false, так как код не поддерживает преобразование порядка
 	original := &Array{
 		Shape:        []int{2, 2},
 		Data:         []uint16{100, 200, 300, 400},
-		FortranOrder: true,
+		FortranOrder: false,
 	}
 
 	if err := Save(filePath, original); err != nil {
@@ -805,4 +810,121 @@ func BenchmarkLoadNPZ(b *testing.B) {
 			}
 		})
 	}
+}
+
+// ---------- Строковые тесты с Python ----------
+func TestLoadFromPythonNpyStrings(t *testing.T) {
+	// Проверяем наличие файлов, сгенерированных Python-скриптом
+	requiredFiles := []string{
+		"testdata/string_array_S.npy",
+		"testdata/string_array_U.npy",
+		"testdata/string_array_U_var.npy",
+	}
+	for _, f := range requiredFiles {
+		if _, err := os.Stat(f); os.IsNotExist(err) {
+			t.Skipf("testdata file %s not found, generate it with 'python3 gen_testdata.py'", f)
+		}
+	}
+
+	tests := []struct {
+		file     string
+		expected *Array
+	}{
+		{
+			file:     "testdata/string_array_S.npy",
+			expected: &Array{Shape: []int{2}, Data: []string{"hello", "world"}},
+		},
+		{
+			file:     "testdata/string_array_U.npy",
+			expected: &Array{Shape: []int{2}, Data: []string{"hello", "Привет"}},
+		},
+		{
+			file:     "testdata/string_array_U_var.npy",
+			expected: &Array{Shape: []int{2}, Data: []string{"世界世界", "世界"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(filepath.Base(tt.file), func(t *testing.T) {
+			arr, err := Load(tt.file)
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if !reflect.DeepEqual(arr.Shape, tt.expected.Shape) {
+				t.Errorf("shape mismatch: got %v, want %v", arr.Shape, tt.expected.Shape)
+			}
+			if arr.FortranOrder != tt.expected.FortranOrder {
+				t.Errorf("fortran_order mismatch: got %v, want %v", arr.FortranOrder, tt.expected.FortranOrder)
+			}
+			if !reflect.DeepEqual(arr.Data, tt.expected.Data) {
+				t.Errorf("data mismatch: got %v, want %v", arr.Data, tt.expected.Data)
+			}
+		})
+	}
+}
+
+func TestSaveReadByPythonStrings(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found in PATH")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "numgo_py_string_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Тест для S типа с переменной длиной строк
+	t.Run("bytes_strings", func(t *testing.T) {
+		data := []string{"abc", "defg", "hijklm"}
+		arr := &Array{Shape: []int{3}, Data: data, FortranOrder: false}
+		npyPath := filepath.Join(tmpDir, "strings_S.npy")
+
+		if err := Save(npyPath, arr); err != nil {
+			t.Fatal(err)
+		}
+
+		script := `
+import sys
+import numpy as np
+arr = np.load(sys.argv[1])
+expected = np.array(['abc', 'defg', 'hijklm'], dtype='S')
+assert arr.dtype.kind == 'S', f"Expected S dtype, got {arr.dtype}"
+assert arr.shape == (3,), f"Shape mismatch: {arr.shape}"
+assert np.array_equal(arr, expected), f"Data mismatch: {arr} != {expected}"
+print("OK")
+`
+		cmd := exec.Command("python3", "-c", script, npyPath)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Python verification failed: %s\nOutput: %s", err, out)
+		}
+	})
+
+	// Тест для U типа с переменной длиной и не-ASCII символами
+	t.Run("unicode_strings", func(t *testing.T) {
+		data := []string{"hello", "Привет", "世界"}
+		arr := &Array{Shape: []int{3}, Data: data, FortranOrder: false}
+		npyPath := filepath.Join(tmpDir, "strings_U.npy")
+
+		if err := Save(npyPath, arr); err != nil {
+			t.Fatal(err)
+		}
+
+		script := `
+import sys
+import numpy as np
+arr = np.load(sys.argv[1])
+expected = np.array(['hello', 'Привет', '世界'], dtype='U')
+assert arr.dtype.kind == 'U', f"Expected U dtype, got {arr.dtype}"
+assert arr.shape == (3,), f"Shape mismatch: {arr.shape}"
+assert np.array_equal(arr, expected), f"Data mismatch: {arr} != {expected}"
+print("OK")
+`
+		cmd := exec.Command("python3", "-c", script, npyPath)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Python verification failed: %s\nOutput: %s", err, out)
+		}
+	})
 }

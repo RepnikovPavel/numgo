@@ -23,55 +23,84 @@ type Array struct {
 var magicPrefix = []byte{0x93, 'N', 'U', 'M', 'P', 'Y'}
 
 type dtypeInfo struct {
-	descr string
-	size  int
-	kind  reflect.Kind
+	descr     string
+	size      int // размер элемента в байтах
+	kind      reflect.Kind
+	isUnicode bool // true для U-типов, false для S-типов
 }
 
 var dtypeMap = map[string]dtypeInfo{
-	"<f4":  {"<f4", 4, reflect.Float32},
-	"<f8":  {"<f8", 8, reflect.Float64},
-	"<i1":  {"<i1", 1, reflect.Int8},
-	"<i2":  {"<i2", 2, reflect.Int16},
-	"<i4":  {"<i4", 4, reflect.Int32},
-	"<i8":  {"<i8", 8, reflect.Int64},
-	"<u1":  {"<u1", 1, reflect.Uint8},
-	"<u2":  {"<u2", 2, reflect.Uint16},
-	"<u4":  {"<u4", 4, reflect.Uint32},
-	"<u8":  {"<u8", 8, reflect.Uint64},
-	"<c8":  {"<c8", 8, reflect.Complex64},
-	"<c16": {"<c16", 16, reflect.Complex128},
-	"<b1":  {"<b1", 1, reflect.Bool},
+	"<f4":  {"<f4", 4, reflect.Float32, false},
+	"<f8":  {"<f8", 8, reflect.Float64, false},
+	"<i1":  {"<i1", 1, reflect.Int8, false},
+	"<i2":  {"<i2", 2, reflect.Int16, false},
+	"<i4":  {"<i4", 4, reflect.Int32, false},
+	"<i8":  {"<i8", 8, reflect.Int64, false},
+	"<u1":  {"<u1", 1, reflect.Uint8, false},
+	"<u2":  {"<u2", 2, reflect.Uint16, false},
+	"<u4":  {"<u4", 4, reflect.Uint32, false},
+	"<u8":  {"<u8", 8, reflect.Uint64, false},
+	"<c8":  {"<c8", 8, reflect.Complex64, false},
+	"<c16": {"<c16", 16, reflect.Complex128, false},
+	"<b1":  {"<b1", 1, reflect.Bool, false},
 
-	"=f4":  {"<f4", 4, reflect.Float32},
-	"=f8":  {"<f8", 8, reflect.Float64},
-	"=i1":  {"<i1", 1, reflect.Int8},
-	"=i2":  {"<i2", 2, reflect.Int16},
-	"=i4":  {"<i4", 4, reflect.Int32},
-	"=i8":  {"<i8", 8, reflect.Int64},
-	"=u1":  {"<u1", 1, reflect.Uint8},
-	"=u2":  {"<u2", 2, reflect.Uint16},
-	"=u4":  {"<u4", 4, reflect.Uint32},
-	"=u8":  {"<u8", 8, reflect.Uint64},
-	"=c8":  {"<c8", 8, reflect.Complex64},
-	"=c16": {"<c16", 16, reflect.Complex128},
-	"=b1":  {"<b1", 1, reflect.Bool},
+	"=f4":  {"<f4", 4, reflect.Float32, false},
+	"=f8":  {"<f8", 8, reflect.Float64, false},
+	"=i1":  {"<i1", 1, reflect.Int8, false},
+	"=i2":  {"<i2", 2, reflect.Int16, false},
+	"=i4":  {"<i4", 4, reflect.Int32, false},
+	"=i8":  {"<i8", 8, reflect.Int64, false},
+	"=u1":  {"<u1", 1, reflect.Uint8, false},
+	"=u2":  {"<u2", 2, reflect.Uint16, false},
+	"=u4":  {"<u4", 4, reflect.Uint32, false},
+	"=u8":  {"<u8", 8, reflect.Uint64, false},
+	"=c8":  {"<c8", 8, reflect.Complex64, false},
+	"=c16": {"<c16", 16, reflect.Complex128, false},
+	"=b1":  {"<b1", 1, reflect.Bool, false},
 
-	"|b1": {"|b1", 1, reflect.Bool},
-	"|u1": {"|u1", 1, reflect.Uint8},
-	"|i1": {"|i1", 1, reflect.Int8},
+	"|b1": {"|b1", 1, reflect.Bool, false},
+	"|u1": {"|u1", 1, reflect.Uint8, false},
+	"|i1": {"|i1", 1, reflect.Int8, false},
 }
 
 func getDtypeInfo(descr string) (dtypeInfo, error) {
 	descr = strings.TrimSpace(strings.ToLower(descr))
-	info, ok := dtypeMap[descr]
-	if !ok {
-		if strings.HasPrefix(descr, ">") {
-			return dtypeInfo{}, fmt.Errorf("big endian not supported: %s", descr)
-		}
-		return dtypeInfo{}, fmt.Errorf("unsupported dtype: %s", descr)
+
+	// Сначала проверяем стандартные типы из dtypeMap
+	if info, ok := dtypeMap[descr]; ok {
+		return info, nil
 	}
-	return info, nil
+
+	// Unicode строки: <U5, |U10, =U8
+	if matched, _ := regexp.MatchString(`^[|<=]?u\d+$`, descr); matched {
+		re := regexp.MustCompile(`u(\d+)`)
+		matches := re.FindStringSubmatch(descr)
+		if len(matches) < 2 {
+			return dtypeInfo{}, fmt.Errorf("invalid unicode dtype: %s", descr)
+		}
+		n, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return dtypeInfo{}, err
+		}
+		size := n * 4 // UTF-32
+		return dtypeInfo{descr: descr, size: size, kind: reflect.String, isUnicode: true}, nil
+	}
+
+	// Байтовые строки: |S5, <S10
+	if matched, _ := regexp.MatchString(`^[|<=]?s\d+$`, descr); matched {
+		re := regexp.MustCompile(`s(\d+)`)
+		matches := re.FindStringSubmatch(descr)
+		if len(matches) < 2 {
+			return dtypeInfo{}, fmt.Errorf("invalid string dtype: %s", descr)
+		}
+		size, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return dtypeInfo{}, err
+		}
+		return dtypeInfo{descr: descr, size: size, kind: reflect.String, isUnicode: false}, nil
+	}
+
+	return dtypeInfo{}, fmt.Errorf("unsupported dtype: %s", descr)
 }
 
 func parseHeader(header string) (shape []int, descr string, fortranOrder bool, err error) {
@@ -190,7 +219,7 @@ func Read(r io.Reader) (*Array, error) {
 		return nil, err
 	}
 
-	dataSlice, err := bytesToSlice(dataBytes, dtype.kind)
+	dataSlice, err := bytesToSlice(dataBytes, dtype)
 	if err != nil {
 		return nil, err
 	}
@@ -202,8 +231,8 @@ func Read(r io.Reader) (*Array, error) {
 	}, nil
 }
 
-func bytesToSlice(b []byte, kind reflect.Kind) (interface{}, error) {
-	switch kind {
+func bytesToSlice(b []byte, info dtypeInfo) (interface{}, error) {
+	switch info.kind {
 	case reflect.Float32:
 		slice := make([]float32, len(b)/4)
 		buf := bytes.NewReader(b)
@@ -241,7 +270,10 @@ func bytesToSlice(b []byte, kind reflect.Kind) (interface{}, error) {
 		binary.Read(buf, binary.LittleEndian, &slice)
 		return slice, nil
 	case reflect.Uint8:
-		return b, nil
+		// Преобразуем []byte в []uint8, чтобы сохранить тип
+		s := make([]uint8, len(b))
+		copy(s, b)
+		return s, nil
 	case reflect.Uint16:
 		slice := make([]uint16, len(b)/2)
 		buf := bytes.NewReader(b)
@@ -273,8 +305,49 @@ func bytesToSlice(b []byte, kind reflect.Kind) (interface{}, error) {
 		buf := bytes.NewReader(b)
 		binary.Read(buf, binary.LittleEndian, &slice)
 		return slice, nil
+	case reflect.String:
+		count := len(b) / info.size
+		if info.isUnicode {
+			slice := make([]string, count)
+			for i := 0; i < count; i++ {
+				start := i * info.size
+				end := start + info.size
+				raw := b[start:end]
+
+				// Ищем первый нулевой символ UTF-32 (4 байта), выровненный по границе
+				nullIndex := -1
+				for j := 0; j+4 <= len(raw); j += 4 {
+					if binary.LittleEndian.Uint32(raw[j:j+4]) == 0 {
+						nullIndex = j
+						break
+					}
+				}
+				if nullIndex >= 0 {
+					raw = raw[:nullIndex]
+				}
+				// Теперь len(raw) гарантированно кратен 4
+				runes := make([]rune, len(raw)/4)
+				for j := 0; j < len(raw); j += 4 {
+					r := binary.LittleEndian.Uint32(raw[j : j+4])
+					runes[j/4] = rune(r)
+				}
+				slice[i] = string(runes)
+			}
+			return slice, nil
+		} else {
+			// байтовые строки (S) – без изменений
+			slice := make([]string, count)
+			for i := 0; i < count; i++ {
+				start := i * info.size
+				end := start + info.size
+				raw := b[start:end]
+				trimmed := bytes.TrimRight(raw, "\x00")
+				slice[i] = string(trimmed)
+			}
+			return slice, nil
+		}
 	default:
-		return nil, fmt.Errorf("unsupported kind: %v", kind)
+		return nil, fmt.Errorf("unsupported kind: %v", info.kind)
 	}
 }
 
@@ -312,7 +385,7 @@ func Save(filename string, arr *Array) error {
 }
 
 func Write(w io.Writer, arr *Array) error {
-	descr, size, err := getDtypeFromData(arr.Data)
+	info, err := getDtypeFromData(arr.Data)
 	if err != nil {
 		return err
 	}
@@ -331,7 +404,7 @@ func Write(w io.Writer, arr *Array) error {
 	}
 
 	headerDict := fmt.Sprintf("{'descr': '%s', 'fortran_order': %s, 'shape': %s}",
-		descr, formatBool(arr.FortranOrder), shapeStr)
+		info.descr, formatBool(arr.FortranOrder), shapeStr)
 
 	headerBytes := []byte(headerDict)
 	prefixLen := 6 + 2 + 2                 // magic + version + len_field
@@ -359,7 +432,7 @@ func Write(w io.Writer, arr *Array) error {
 	}
 	w.Write([]byte{'\n'})
 
-	return writeData(w, arr.Data, size)
+	return writeData(w, arr.Data, info)
 }
 
 func formatBool(b bool) string {
@@ -369,41 +442,100 @@ func formatBool(b bool) string {
 	return "False"
 }
 
-func getDtypeFromData(data interface{}) (string, int, error) {
-	switch data.(type) {
+func getDtypeFromData(data interface{}) (dtypeInfo, error) {
+	switch v := data.(type) {
 	case []float32:
-		return "<f4", 4, nil
+		return dtypeInfo{"<f4", 4, reflect.Float32, false}, nil
 	case []float64:
-		return "<f8", 8, nil
+		return dtypeInfo{"<f8", 8, reflect.Float64, false}, nil
 	case []int8:
-		return "<i1", 1, nil
+		return dtypeInfo{"<i1", 1, reflect.Int8, false}, nil
 	case []int16:
-		return "<i2", 2, nil
+		return dtypeInfo{"<i2", 2, reflect.Int16, false}, nil
 	case []int32:
-		return "<i4", 4, nil
+		return dtypeInfo{"<i4", 4, reflect.Int32, false}, nil
 	case []int64:
-		return "<i8", 8, nil
+		return dtypeInfo{"<i8", 8, reflect.Int64, false}, nil
 	case []uint8:
-		return "|u1", 1, nil
+		return dtypeInfo{"|u1", 1, reflect.Uint8, false}, nil
 	case []uint16:
-		return "<u2", 2, nil
+		return dtypeInfo{"<u2", 2, reflect.Uint16, false}, nil
 	case []uint32:
-		return "<u4", 4, nil
+		return dtypeInfo{"<u4", 4, reflect.Uint32, false}, nil
 	case []uint64:
-		return "<u8", 8, nil
+		return dtypeInfo{"<u8", 8, reflect.Uint64, false}, nil
 	case []bool:
-		return "|b1", 1, nil
+		return dtypeInfo{"|b1", 1, reflect.Bool, false}, nil
 	case []complex64:
-		return "<c8", 8, nil
+		return dtypeInfo{"<c8", 8, reflect.Complex64, false}, nil
 	case []complex128:
-		return "<c16", 16, nil
+		return dtypeInfo{"<c16", 16, reflect.Complex128, false}, nil
+	case []string:
+		// Определяем, есть ли не-ASCII символы
+		hasUnicode := false
+		maxBytes := 0
+		maxRunes := 0
+		for _, s := range v {
+			b := []byte(s)
+			if len(b) > maxBytes {
+				maxBytes = len(b)
+			}
+			runes := []rune(s)
+			if len(runes) > maxRunes {
+				maxRunes = len(runes)
+			}
+			for _, r := range runes {
+				if r > 127 {
+					hasUnicode = true
+					break
+				}
+			}
+		}
+		if hasUnicode {
+			descr := fmt.Sprintf("<U%d", maxRunes)
+			size := maxRunes * 4
+			return dtypeInfo{descr, size, reflect.String, true}, nil
+		} else {
+			descr := fmt.Sprintf("|S%d", maxBytes)
+			return dtypeInfo{descr, maxBytes, reflect.String, false}, nil
+		}
 	default:
-		return "", 0, fmt.Errorf("unsupported go slice type for saving: %T", data)
+		return dtypeInfo{}, fmt.Errorf("unsupported go slice type for saving: %T", data)
 	}
 }
 
-func writeData(w io.Writer, data interface{}, size int) error {
-	return binary.Write(w, binary.LittleEndian, data)
+func writeData(w io.Writer, data interface{}, info dtypeInfo) error {
+	switch v := data.(type) {
+	case []string:
+		for _, s := range v {
+			if info.isUnicode {
+				runes := []rune(s)
+				if len(runes) > info.size/4 {
+					return fmt.Errorf("string %q has %d runes, exceeds capacity %d", s, len(runes), info.size/4)
+				}
+				buf := make([]byte, info.size)
+				for i, r := range runes {
+					binary.LittleEndian.PutUint32(buf[i*4:], uint32(r))
+				}
+				if _, err := w.Write(buf); err != nil {
+					return err
+				}
+			} else {
+				b := []byte(s)
+				if len(b) > info.size {
+					return fmt.Errorf("string %q exceeds fixed length %d bytes", s, info.size)
+				}
+				padded := make([]byte, info.size)
+				copy(padded, b)
+				if _, err := w.Write(padded); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	default:
+		return binary.Write(w, binary.LittleEndian, data)
+	}
 }
 
 func SaveNPZ(filename string, arrays map[string]*Array) error {
